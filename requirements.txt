@@ -1,0 +1,11 @@
+numpy
+opencv-python
+mediapipe
+tensorflow
+torch
+torchvision
+transformers
+pytesseract
+gTTS
+googletrans==4.0.0-rc1
+tkinter
