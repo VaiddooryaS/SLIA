@@ -1,86 +1,137 @@
 import os
-import cv2
+import random
 import numpy as np
-import mediapipe as mp
 import tensorflow as tf
+from tensorflow.keras.preprocessing.image import ImageDataGenerator
+from tensorflow.keras.models import Sequential
+from tensorflow.keras.layers import Conv2D, MaxPooling2D, Flatten, Dense, Dropout, BatchNormalization
+from tensorflow.keras.optimizers import AdamW
+from tensorflow.keras.callbacks import ReduceLROnPlateau, EarlyStopping
+from tensorflow.keras.utils import to_categorical
 from sklearn.model_selection import train_test_split
+import shutil
 
-# Dataset path
-DATASET_PATH = "C:/Users/Administrator/Documents/vidhu/uniii/python/slia/dataset/Root/"
-IMAGE_SIZE = (64, 64)
-LIMIT_PER_CLASS = 200  # 200 images per letter from each type
+# ✅ Paths
+DATASET_PATH = r"C:\Users\Administrator\Documents\vidhu\uniii\python\slia\dataset\Root\Type_02_(Keypoint Based)"
+MODEL_SAVE_PATH = r"C:\Users\Administrator\Documents\vidhu\uniii\python\slia\models\new_model.h5"
+TEMP_TRAIN_PATH = r"C:\Users\Administrator\Documents\vidhu\uniii\python\slia\dataset\temp_train"
 
-mp_hands = mp.solutions.hands
-hands = mp_hands.Hands(static_image_mode=True, max_num_hands=1)
-
-
-def process_image(image_path):
-    """Loads and processes an image."""
-    image = cv2.imread(image_path)
-    if image is None:
-        print(f"⚠️ Warning: Could not read image {image_path}")
-        return None
-    image = cv2.resize(image, IMAGE_SIZE)
-    image = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-    return np.array(image) / 255.0  # Normalize
+# ✅ Fixed class labels
+CLASS_NAMES = ['A', 'B', 'C', 'D', 'DEL', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L', 'M', 'N', 'O', 'P', 'Q',
+               'R', 'S', 'SPACE', 'T', 'U', 'V', 'W', 'X', 'Y', 'Z']
 
 
-def load_data():
-    """Loads images from both gesture types, ensuring 200 images per letter from each."""
-    data, labels = [], []
-    gesture_types = ["Type_01_(Raw_Gesture)", "Type_02_(Keypoint Based)"]
+# ✅ Ensure only the valid classes are used
+def filter_and_balance_dataset():
+    if os.path.exists(TEMP_TRAIN_PATH):
+        shutil.rmtree(TEMP_TRAIN_PATH)
+    os.makedirs(TEMP_TRAIN_PATH, exist_ok=True)
 
-    for gesture_type in gesture_types:
-        gesture_path = os.path.join(DATASET_PATH, gesture_type)
+    for label in CLASS_NAMES:
+        original_class_path = os.path.join(DATASET_PATH, label)
+        temp_class_path = os.path.join(TEMP_TRAIN_PATH, label)
 
-        for category in os.listdir(gesture_path):
-            category_path = os.path.join(gesture_path, category)
-            if not os.path.isdir(category_path):
-                continue
+        if not os.path.exists(original_class_path):
+            print(f"Skipping {label}, folder not found in dataset.")
+            continue
 
-            images = os.listdir(category_path)[:LIMIT_PER_CLASS]  # Take only first 200 images
-            for img_name in images:
-                img_path = os.path.join(category_path, img_name)
-                processed_img = process_image(img_path)
-                if processed_img is not None:
-                    data.append(processed_img)
-                    labels.append(category)  # Category is the letter (A-Z, SPACE, DEL)
+        os.makedirs(temp_class_path, exist_ok=True)
+        images = os.listdir(original_class_path)
+        random.shuffle(images)
+        selected_images = images[:800]  # Pick 800 random images
 
-    return np.array(data), np.array(labels)
+        for img in selected_images:
+            src = os.path.join(original_class_path, img)
+            dst = os.path.join(temp_class_path, img)
+            shutil.copy(src, dst)
+
+    print("✅ Dataset balanced with 800 images per class.")
 
 
-# Load dataset
-X, y = load_data()
-X = X.reshape(-1, 64, 64, 1)  # Reshape for CNN input
+# ✅ Data Augmentation
+datagen = ImageDataGenerator(
+    rescale=1.0 / 255.0,
+    rotation_range=15,
+    width_shift_range=0.2,
+    height_shift_range=0.2,
+    zoom_range=0.2,
+    horizontal_flip=True,
+    validation_split=0.2
+)
 
-# Dynamically get class labels
-unique_labels = sorted(set(y))
-num_classes = len(unique_labels)
 
-# Create mapping for labels
-label_to_index = {label: idx for idx, label in enumerate(unique_labels)}
-y = tf.keras.utils.to_categorical([label_to_index[label] for label in y], num_classes=num_classes)
+# ✅ Load and Prepare Data
+def get_data_generators():
+    train_gen = datagen.flow_from_directory(
+        TEMP_TRAIN_PATH,
+        target_size=(64, 64),
+        batch_size=32,
+        class_mode='categorical',
+        subset='training'
+    )
 
-# Train-Test Split
-X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+    val_gen = datagen.flow_from_directory(
+        TEMP_TRAIN_PATH,
+        target_size=(64, 64),
+        batch_size=32,
+        class_mode='categorical',
+        subset='validation'
+    )
 
-# Model Definition
-model = tf.keras.models.Sequential([
-    tf.keras.layers.Conv2D(32, (3, 3), activation='relu', input_shape=(64, 64, 1)),
-    tf.keras.layers.MaxPooling2D((2, 2)),
-    tf.keras.layers.Conv2D(64, (3, 3), activation='relu'),
-    tf.keras.layers.MaxPooling2D((2, 2)),
-    tf.keras.layers.Flatten(),
-    tf.keras.layers.Dense(128, activation='relu'),
-    tf.keras.layers.Dense(num_classes, activation='softmax')  # Uses correct number of classes
-])
+    return train_gen, val_gen
 
-# Compile and Train
-model.compile(optimizer='adam', loss='categorical_crossentropy', metrics=['accuracy'])
-model.fit(X_train, y_train, epochs=10, validation_data=(X_test, y_test))
 
-# Save Model
-model.save("models/sign_language_model.h5")
+# ✅ Define CNN Model
+def create_model():
+    model = Sequential([
+        Conv2D(32, (3, 3), activation='relu', input_shape=(64, 64, 3)),
+        BatchNormalization(),
+        MaxPooling2D(2, 2),
 
-# Print summary
-print(f"✅ Model trained with {num_classes} classes: {unique_labels}")
+        Conv2D(64, (3, 3), activation='relu'),
+        BatchNormalization(),
+        MaxPooling2D(2, 2),
+
+        Conv2D(128, (3, 3), activation='relu'),
+        BatchNormalization(),
+        MaxPooling2D(2, 2),
+
+        Flatten(),
+        Dense(128, activation='relu'),
+        Dropout(0.5),
+        Dense(len(CLASS_NAMES), activation='softmax')  # 28 output classes
+    ])
+
+    model.compile(
+        optimizer=AdamW(learning_rate=0.001),
+        loss='categorical_crossentropy',
+        metrics=['accuracy']
+    )
+
+    return model
+
+
+# ✅ Training Callbacks
+early_stop = EarlyStopping(monitor='val_loss', patience=5, restore_best_weights=True)
+reduce_lr = ReduceLROnPlateau(monitor='val_loss', factor=0.5, patience=3, min_lr=1e-6)
+
+
+# ✅ Train Model
+def train():
+    filter_and_balance_dataset()
+    train_gen, val_gen = get_data_generators()
+    model = create_model()
+
+    history = model.fit(
+        train_gen,
+        validation_data=val_gen,
+        epochs=50,
+        callbacks=[early_stop, reduce_lr]
+    )
+
+    model.save(MODEL_SAVE_PATH)
+    print(f"✅ Model saved at: {MODEL_SAVE_PATH}")
+
+
+if __name__ == "__main__":
+    train()

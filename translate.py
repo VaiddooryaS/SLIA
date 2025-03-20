@@ -5,4 +5,4 @@ def translate_text(text, target_lang):
     translated = translator.translate(text, dest=target_lang)
     return translated.text
 
-print(translate_text("Hello", "ta"))  # Translate to Tamil
+# print(translate_text("Hello", "ta"))  # Translate to Tamil
